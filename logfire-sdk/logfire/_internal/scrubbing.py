@@ -328,6 +328,16 @@ class SpanScrubber:
                     return self._redact(ScrubMatch(path, value, match))
                 else:
                     return json.dumps(self.scrub(path, value))
+            elif '\\' in value:
+                # JSON escaping can hide a match (for example, a newline matched by \s).
+                # Strings without escapes keep the regex-only fast path.
+                try:
+                    decoded = json.loads(value)
+                except json.JSONDecodeError:
+                    return value
+                scrubbed = self.scrub(path, decoded)
+                if scrubbed != decoded:
+                    return json.dumps(scrubbed)
         elif isinstance(value, Sequence):
             return [self.scrub(path + (i,), x) for i, x in enumerate(cast('Sequence[Any]', value))]
         elif isinstance(value, Mapping):

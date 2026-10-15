@@ -35,6 +35,11 @@ logfire.info(
 )
 ```
 
+Patterns also match decoded values inside JSON attributes from other instrumentation.
+For example, `r'HDR\sBODY'` matches `HDR` followed by a newline and `BODY`, even when
+the attribute stores that newline as the JSON escape `\n`. Callbacks receive the
+decoded value and the path to the matching field.
+
 Here are the default scrubbing patterns:
 
 ```python

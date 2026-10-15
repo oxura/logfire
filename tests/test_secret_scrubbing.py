@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import re
 from pathlib import Path
 from typing import Any
@@ -15,6 +16,59 @@ from opentelemetry.trace.propagation import get_current_span
 import logfire
 from logfire._internal.scrubbing import DEFAULT_PATTERNS, NoopScrubber, Scrubber
 from logfire.testing import TestExporter, TestLogExporter
+
+
+@pytest.mark.parametrize(
+    ('pattern', 'text'),
+    [
+        (r'HDR\sBODY', 'HDR\nBODY private document'),
+        (r'HDR.BODY', 'HDR\tBODY private document'),
+        ('HDR"BODY', 'HDR"BODY private document'),
+        ('HDRéBODY', 'HDRéBODY private document'),
+        (r'HDR\\BODY', 'HDR\\BODY private document'),
+    ],
+)
+@pytest.mark.parametrize('ensure_ascii', [True, False])
+def test_scrub_escaped_json(
+    exporter: TestExporter, config_kwargs: dict[str, Any], pattern: str, text: str, ensure_ascii: bool
+):
+    logfire.configure(**config_kwargs, scrubbing=logfire.ScrubbingOptions(extra_patterns=[pattern]))
+    payload = json.dumps({'messages': [{'text': text}], 'safe': 'retained'}, ensure_ascii=ensure_ascii)
+    with logfire.span('external instrumentation') as span:
+        span.set_attribute('input.value', payload)
+
+    attributes = exporter.exported_spans_as_dict()[-1]['attributes']
+    actual = json.loads(attributes['input.value'])
+    assert actual['safe'] == 'retained'
+    assert actual['messages'][0]['text'].startswith('[Scrubbed due to ')
+    assert 'private document' not in attributes['input.value']
+    notes = json.loads(attributes['logfire.scrubbed'])
+    assert notes[0]['path'] == ['attributes', 'input.value', 'messages', 0, 'text']
+
+
+def test_scrub_escaped_json_callback(exporter: TestExporter, config_kwargs: dict[str, Any]):
+    matches: list[logfire.ScrubMatch] = []
+
+    def callback(match: logfire.ScrubMatch):
+        matches.append(match)
+        return match.value
+
+    logfire.configure(
+        **config_kwargs, scrubbing=logfire.ScrubbingOptions(extra_patterns=[r'HDR\sBODY'], callback=callback)
+    )
+    payload = '{ "text": "HDR\\nBODY document" }'
+    with logfire.span('external instrumentation') as span:
+        span.set_attribute('input.value', payload)
+        span.set_attribute('unrelated', 'not JSON\\n')
+
+    attributes = exporter.exported_spans_as_dict()[-1]['attributes']
+    assert attributes['input.value'] == payload
+    assert attributes['unrelated'] == 'not JSON\\n'
+    assert 'logfire.scrubbed' not in attributes
+    assert len(matches) == 1
+    assert matches[0].value == 'HDR\nBODY document'
+    assert matches[0].path == ('attributes', 'input.value', 'text')
+
 
 DEFAULT_PATTERN_EXAMPLES = {
     'password': 'has_password_value',
