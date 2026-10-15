@@ -604,7 +604,7 @@ class Variable(Generic[T_co]):
                 # so the fall-back result can surface the failure chain in `composed_from`.
                 return _ResolveAttempt(
                     ok=False,
-                    exception=VariableCompositionError(fatal_error),
+                    exception=fatal_error,
                     stage='composition',
                     composed=composed,
                 )
@@ -1143,14 +1143,14 @@ def _serialize_composed_reference(ref: ComposedReference) -> dict[str, Any]:
         'version': ref.version,
         'label': ref.label,
         'reason': ref.reason,
-        'error': ref.error,
+        'error': str(ref.error) if ref.error is not None else None,
     }
     if ref.composed_from:
         data['composed_from'] = [_serialize_composed_reference(c) for c in ref.composed_from]
     return data
 
 
-def _first_fatal_composition_error(composed: list[ComposedReference]) -> str | None:
+def _first_fatal_composition_error(composed: list[ComposedReference]) -> VariableCompositionError | None:
     """Return the first *fatal* nested composition error (cycle / depth overflow), if any.
 
     Soft, per-reference failures (a missing/unresolvable reference, or a referenced variable

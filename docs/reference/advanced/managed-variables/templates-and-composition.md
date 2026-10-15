@@ -290,6 +290,12 @@ Composition follows standard Handlebars semantics, with one extra rule for choos
 
 **A provider/stored value (and an `override()`) is composed strictly.** If any `@{ref}@` (or a dotted `@{ref.field}@`) in it can't be resolved, the value is discarded and resolution falls back to the variable's **code default**, with a `RuntimeWarning`. Cycles (`A → @{B}@`, `B → @{A}@`) and deep chains (`MAX_COMPOSITION_DEPTH = 20`) fall back the same way. The triggering exception is recorded on `ResolvedVariable.exception` and `reason` becomes `'other_error'`, so callers can detect and react.
 
+Composition failures keep their exception type, including
+`VariableCompositionCycleError` for circular references. Entries in
+`resolved.composed_from` also carry the exception in `error`; use `str(reference.error)`
+when you need its message. Exported span attributes continue to contain error messages
+as strings.
+
 This is the useful part: rather than serve a value that's been assembled *around* a missing fragment, resolution falls back to a value that's known to be complete on its own. A prompt that composes `@{persona}@ @{safety_rules}@` won't be served as just the persona with the safety rules silently dropped. If `@{safety_rules}@` can't be resolved, you get the variable's self-contained code default instead.
 
 ```python
@@ -353,7 +359,7 @@ A cycle (or depth overflow) is always a structural failure. When it occurs while
 import warnings
 
 import logfire
-from logfire.variables import VariableCompositionError
+from logfire.variables import VariableCompositionCycleError
 
 logfire.configure()
 
@@ -367,9 +373,8 @@ with warnings.catch_warnings(record=True) as caught:
     warnings.simplefilter('always')
     with left.get() as resolved:
         # `resolved.reason` is `'other_error'` because composition failed,
-        # and `resolved.exception` is a `VariableCompositionError` (or a
-        # subclass like `VariableCompositionCycleError` for cycles).
-        print(resolved.reason, isinstance(resolved.exception, VariableCompositionError))
+        # and `resolved.exception` identifies the circular reference.
+        print(resolved.reason, isinstance(resolved.exception, VariableCompositionCycleError))
         #> other_error True
     print(any('composition failed' in str(w.message) for w in caught))
     #> True

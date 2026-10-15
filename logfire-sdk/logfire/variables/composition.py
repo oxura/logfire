@@ -73,8 +73,8 @@ class ComposedReference:
     """Version of the referenced variable's resolution."""
     reason: ResolutionReason
     """How the referenced variable was resolved."""
-    error: str | None = None
-    """Error message if the reference could not be expanded."""
+    error: VariableCompositionError | None = None
+    """Exception if the reference could not be expanded, preserving its specific type."""
     composed_from: list[ComposedReference] = field(default_factory=list['ComposedReference'])
     """Nested references that were expanded within this reference."""
     fatal: bool = False
@@ -192,7 +192,7 @@ def expand_references(
                     label=ref_label,
                     version=ref_version,
                     reason=ref_reason,
-                    error=f"Referenced variable '{ref_name}' could not be resolved.",
+                    error=VariableCompositionError(f"Referenced variable '{ref_name}' could not be resolved."),
                 )
             )
             continue
@@ -208,7 +208,9 @@ def expand_references(
                     label=ref_label,
                     version=ref_version,
                     reason=ref_reason,
-                    error=f"Referenced variable '{ref_name}' has a non-JSON serialized value.",
+                    error=VariableCompositionError(
+                        f"Referenced variable '{ref_name}' has a non-JSON serialized value."
+                    ),
                 )
             )
             continue
@@ -236,7 +238,7 @@ def expand_references(
                         label=ref_label,
                         version=ref_version,
                         reason=ref_reason,
-                        error=str(e),
+                        error=e,
                         fatal=True,
                     )
                 )

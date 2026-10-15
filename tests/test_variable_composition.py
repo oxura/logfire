@@ -155,7 +155,8 @@ class TestExpandReferences:
         # b itself resolved, but its expansion of @{a}@ failed
         assert len(b_ref.composed_from) == 1
         assert b_ref.composed_from[0].name == 'a'
-        assert b_ref.composed_from[0].error == 'Circular reference detected: my_var -> a -> b -> a'
+        assert isinstance(b_ref.composed_from[0].error, VariableCompositionCycleError)
+        assert str(b_ref.composed_from[0].error) == 'Circular reference detected: my_var -> a -> b -> a'
         assert b_ref.composed_from[0].fatal is True  # cycles are fatal
 
     def test_self_reference_cycle(self):
@@ -168,7 +169,8 @@ class TestExpandReferences:
         # a resolved, but its self-reference @{a}@ failed with cycle
         assert len(composed[0].composed_from) == 1
         assert composed[0].composed_from[0].name == 'a'
-        assert composed[0].composed_from[0].error == 'Circular reference detected: my_var -> a -> a'
+        assert isinstance(composed[0].composed_from[0].error, VariableCompositionCycleError)
+        assert str(composed[0].composed_from[0].error) == 'Circular reference detected: my_var -> a -> a'
         assert composed[0].composed_from[0].fatal is True  # cycles are fatal
 
     def test_depth_limit(self):
@@ -189,12 +191,12 @@ class TestExpandReferences:
         ref = composed[0]
         depth_error_found = False
         while ref.composed_from:
-            if ref.error and 'Maximum composition depth' in ref.error:
+            if ref.error and 'Maximum composition depth' in str(ref.error):
                 depth_error_found = True
                 break
             ref = ref.composed_from[0]
         if not depth_error_found and ref.error:
-            depth_error_found = 'Maximum composition depth' in ref.error
+            depth_error_found = 'Maximum composition depth' in str(ref.error)
         assert depth_error_found, 'Expected depth limit error somewhere in the chain'
 
     def test_unresolvable_reference(self):
@@ -394,7 +396,7 @@ class TestExpandReferences:
         assert expanded == '""'
         assert len(composed) == 1
         assert composed[0].error is not None
-        assert 'non-JSON' in composed[0].error
+        assert 'non-JSON' in str(composed[0].error)
 
 
 class TestFindReferences:
@@ -1003,23 +1005,31 @@ class TestCompositionIntegration:
         assert result.composed_from[0].name == 'b'
         assert result.composed_from[0].composed_from[0].name == 'c'
 
-    def test_cycle_falls_back_gracefully(self, config_kwargs: dict[str, Any]):
+    def test_cycle_falls_back_gracefully(self, config_kwargs: dict[str, Any], exporter: TestExporter):
         """Cycles in references are surfaced on the top-level result and a warning is emitted."""
         variables_config = _make_variables_config(
             a='"@{b}@"',
             b='"@{a}@"',
         )
-        config_kwargs['variables'] = LocalVariablesOptions(config=variables_config)
+        config_kwargs['variables'] = LocalVariablesOptions(config=variables_config, instrument=True)
         lf = logfire.configure(**config_kwargs)
 
         var = lf.var(name='a', default='fallback', type=str)
         with pytest.warns(RuntimeWarning, match='composition failed'):
             result = var.get()
         assert result.value == 'fallback'
-        assert isinstance(result.exception, VariableCompositionError)
+        assert isinstance(result.exception, VariableCompositionCycleError)
         assert result.reason == 'other_error'
         assert len(result.composed_from) == 1
-        assert result.composed_from[0].composed_from[0].error == 'Circular reference detected: a -> b -> a'
+        assert result.composed_from[0].composed_from[0].error is result.exception
+        assert str(result.exception) == 'Circular reference detected: a -> b -> a'
+
+        resolve_span = next(s for s in reversed(exporter.exported_spans) if s.name == 'Resolve variable a')
+        attributes = dict(resolve_span.attributes or {})
+        composed_json = attributes['composed_from']
+        assert isinstance(composed_json, str)
+        composed_data = json.loads(composed_json)
+        assert composed_data[0]['composed_from'][0]['error'] == str(result.exception)
 
     def test_nonexistent_reference_in_provider_value_falls_back_to_code_default(self, config_kwargs: dict[str, Any]):
         """A missing `@{ref}@` in a provider value falls back to the code default.
